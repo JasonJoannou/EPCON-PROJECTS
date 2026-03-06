@@ -6,9 +6,19 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 from apscheduler.schedulers.background import BackgroundScheduler
 from google import genai
 from typing import List
+import logging
 from dotenv import load_dotenv
-load_dotenv()  # Load environment variables from .env file
+load_dotenv()
 
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("./bot.log"),  # Saves logs to this file
+        logging.StreamHandler()         # Still prints to terminal if it's open
+    ]
+)
+logger = logging.getLogger(__name__)
 
 app = App(
     token=os.environ.get("SLACK_BOT_TOKEN"),
@@ -24,16 +34,23 @@ class CatchupBot:
     def __init__(self):
         self._init_db()
         self.client = genai.Client(api_key=os.environ.get("GENAI_API_KEY"))
-        self.workspace_members = self._get_team_members(CHANNEL_ID)
+        logger.info("CatchupBot initialized.")
+        try:
+            self.workspace_members = self._get_team_members(CHANNEL_ID)
+            logger.info(f"Retrieved {len(self.workspace_members)} workspace members.")
+        except Exception as e:
+            logger.error(f"Failed to fetch workspace members: {e}")
 
     def _init_db(self):
-        with sqlite3.connect("standups.db") as conn:
+        with sqlite3.connect("./standups.db") as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS updates (
                     date TEXT, user_id TEXT, morning_plan TEXT, afternoon_done TEXT,
                     PRIMARY KEY (date, user_id)
                 )
             """)
+
+        logger.info("Database initialized.")
 
     def _get_team_members(
         self, channel_id: str
@@ -85,24 +102,26 @@ class CatchupBot:
 
     def get_yesterday_context(self, user_id):
         yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-        with sqlite3.connect("standups.db") as conn:
+        with sqlite3.connect("./standups.db") as conn:
             res = conn.execute("SELECT afternoon_done FROM updates WHERE date=? AND user_id=?", 
                                (yesterday, user_id)).fetchone()
         return res[0] if res else "No previous data."
 
     def get_morning_plan(self, user_id):
         today = datetime.now().strftime('%Y-%m-%d')
-        with sqlite3.connect("standups.db") as conn:
+        with sqlite3.connect("./standups.db") as conn:
             res = conn.execute("SELECT morning_plan FROM updates WHERE date=? AND user_id=?", 
                                (today, user_id)).fetchone()
         return res[0] if res else "No plan recorded."
     
     def save_update(self, user_id, text, column):
         today = datetime.now().strftime('%Y-%m-%d')
-        with sqlite3.connect("standups.db") as conn:
+        with sqlite3.connect("./standups.db") as conn:
             query = f"INSERT INTO updates (date, user_id, {column}) VALUES (?, ?, ?) " \
                     f"ON CONFLICT(date, user_id) DO UPDATE SET {column}=excluded.{column}"
             conn.execute(query, (today, user_id, text))
+
+        logger.info(f"Saved {column} for user {user_id}")
 
 
     def summarise_update(self, user_input: str, time_period: str, context: str = "", yesterday_context: str = "") -> str:
@@ -114,7 +133,7 @@ class CatchupBot:
             )
             return response.text
         except Exception as e:
-            print(f"AI Error: {e}")
+            logger.error(f"AI Generation Error: {e}")
             header = "*Morning Plan*" if time_period == "morning" else "*Evening Recap*"
             
             return (
@@ -133,9 +152,12 @@ def handle_message(event, client, say):
 
     user_id = event["user"]
     raw_text = event["text"]
+    logger.info(f"Incoming message from {user_id}")
     
-    # Send a quick reaction or message so the user knows it's working
-    client.reactions_add(channel=event["channel"], name="white_check_mark", timestamp=event["ts"])
+    try:
+        client.reactions_add(channel=event["channel"], name="white_check_mark", timestamp=event["ts"])
+    except Exception as e:
+        logger.warning(f"Could not add reaction: {e}")
 
     mode = "morning" if datetime.now().hour < 14 else "afternoon"
     column = "morning_plan" if mode == "morning" else "afternoon_done"
@@ -151,6 +173,7 @@ def handle_message(event, client, say):
         channel=CHANNEL_ID,
         text=f"👤 *Update from <@{user_id}>*\n{response}"
     )
+    logger.info(f"Posted {mode} update for {user_id} to channel {CHANNEL_ID}")
 
 
 def send_pings(text):
@@ -164,21 +187,22 @@ def send_pings(text):
         user_info = app.client.users_info(user=uid)
         if not user_info["user"]["is_bot"]:
             app.client.chat_postMessage(channel=uid, text=text)
+            logger.info(f"Sent ping to {uid}")
 
 if __name__ == "__main__":
     # Start the Scheduler
     scheduler = BackgroundScheduler()
-    scheduler.add_job(lambda: send_pings("Good morning! ☀️ What's the plan for today?"), 'cron', hour=10)
-    scheduler.add_job(lambda: send_pings("EOD Recap time! 🏁 What did you get done?"), 'cron', hour=17)
+    scheduler.add_job(lambda: send_pings("Good morning! What's the plan for today?"), 'cron', hour=10)
+    scheduler.add_job(lambda: send_pings("EOD Recap time! What did you get done?"), 'cron', hour=17)
     scheduler.start()
 
     # --- ADD THIS LINE FOR TESTING ---
     if TEST_MODE:
-        print("🛠️ TEST_MODE is ON: Triggering instant test ping...")
+        logger.info("TEST_MODE is ON: Triggering instant test ping...")
         send_pings("Instant Test: What is the plan for today?")
     # ---------------------------------
 
     # Launch Socket Mode
-    print("🚀 Bot is running...")
+    logger.info("Bot is running...")
     handler = SocketModeHandler(app, os.environ.get("SLACK_APP_TOKEN"))
     handler.start()
