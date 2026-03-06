@@ -1,4 +1,4 @@
 slack_bolt
-google-generativeai
+google-genai
 apscheduler
 python-dotenv

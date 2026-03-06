@@ -4,14 +4,16 @@ from datetime import datetime, timedelta
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from apscheduler.schedulers.background import BackgroundScheduler
-import google.generativeai as genai
+from google import genai
 from typing import List
 from dotenv import load_dotenv
 load_dotenv()  # Load environment variables from .env file
 
 
-token = os.environ.get("SLACK_AUTHO_TOKEN")
-app = App(token=token)
+app = App(
+    token=os.environ.get("SLACK_BOT_TOKEN"),
+    token_verification_enabled=False 
+)
 TEST_MODE = True  # Set to False for production
 CHANNEL_ID = os.environ.get("SLACK_CHANNEL_ID") if not TEST_MODE else os.environ.get("SLACK_CHANNEL_ID_TEST")
 MY_SLACK_ID = os.environ.get("MY_SLACK_ID") if TEST_MODE else None
@@ -21,8 +23,7 @@ class CatchupBot:
 
     def __init__(self):
         self._init_db()
-        genai.configure(api_key=os.environ.get("GENAI_API_KEY"))
-        self.model = genai.GenerativeModel("gemini-1.5-flash")
+        self.client = genai.Client(api_key=os.environ.get("GENAI_API_KEY"))
         self.workspace_members = self._get_team_members(CHANNEL_ID)
 
     def _init_db(self):
@@ -106,16 +107,25 @@ class CatchupBot:
 
     def summarise_update(self, user_input: str, time_period: str, context: str = "", yesterday_context: str = "") -> str:
         prompt = self._prepare_prompt(user_input, time_period, context, yesterday_context)
-        response = self.model.generate_content(prompt)
-        return response.text
+        try:
+            response = self.client.models.generate_content(
+                model="gemini-2.5-flash-lite",
+                contents=prompt
+            )
+            return response.text
+        except Exception as e:
+            print(f"AI Error: {e}")
+            return f"Summary unavailable. Raw input: {user_input}"
     
 
 catchup_bot = CatchupBot()
 
 @app.event("message")
 def handle_message(event, client):
+    print(f"DEBUG: Received a message from {event.get('user')}") # ADD THIS
     # Only process DMs from humans
     if event.get("channel_type") != "im" or event.get("bot_id"):
+        print("DEBUG: Ignored (not a DM or is a bot)")
         return
 
     user_id = event["user"]
