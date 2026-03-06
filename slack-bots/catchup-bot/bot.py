@@ -115,35 +115,38 @@ class CatchupBot:
             return response.text
         except Exception as e:
             print(f"AI Error: {e}")
-            return f"Summary unavailable. Raw input: {user_input}"
+            header = "*Morning Plan*" if time_period == "morning" else "*Evening Recap*"
+            
+            return (
+                f"{header} (Raw Update)\n"
+                f"• *Status:* AI summary unavailable, raw text preserved below:\n\n"
+                f"> {user_input} "
+            )
     
 
 catchup_bot = CatchupBot()
 
 @app.event("message")
-def handle_message(event, client):
-    print(f"DEBUG: Received a message from {event.get('user')}") # ADD THIS
-    # Only process DMs from humans
+def handle_message(event, client, say):
     if event.get("channel_type") != "im" or event.get("bot_id"):
-        print("DEBUG: Ignored (not a DM or is a bot)")
         return
 
     user_id = event["user"]
     raw_text = event["text"]
     
-    # Mode logic: 2 PM cutoff
+    # Send a quick reaction or message so the user knows it's working
+    client.reactions_add(channel=event["channel"], name="white_check_mark", timestamp=event["ts"])
+
     mode = "morning" if datetime.now().hour < 14 else "afternoon"
     column = "morning_plan" if mode == "morning" else "afternoon_done"
     
-    # Save the raw data
     catchup_bot.save_update(user_id, raw_text, column)
     
-    # Summarize with AI
     yesterday_context = catchup_bot.get_yesterday_context(user_id)
     context = catchup_bot.get_morning_plan(user_id) if mode == "afternoon" else ""
     response = catchup_bot.summarise_update(raw_text, mode, context, yesterday_context)
 
-    # Post to the public standup channel
+    # Post to the public channel
     client.chat_postMessage(
         channel=CHANNEL_ID,
         text=f"👤 *Update from <@{user_id}>*\n{response}"
