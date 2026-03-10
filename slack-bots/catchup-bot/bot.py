@@ -199,7 +199,7 @@ if __name__ == "__main__":
     # --- ADD THIS LINE FOR TESTING ---
     if TEST_MODE:
         logger.info("TEST_MODE is ON: Triggering instant test ping...")
-        send_pings("Instant Test: What is the plan for today?")
+        send_pings("What is the plan for today?")
     # ---------------------------------
 
     # Launch Socket Mode
